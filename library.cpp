@@ -7,6 +7,7 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <map>
 
 #pragma comment(lib, "ws2_32.lib")
 // ... (Include your standard Linker/Version.dll lines here) ...
@@ -40,6 +41,8 @@ tSendTo fpSendTo = NULL;
 tRecvFrom fpRecvFrom = NULL;
 tBind fpBind = NULL;
 tWSARecvFrom fpWSARecvFrom = NULL;
+
+std::map<unsigned long, unsigned short> activeClients;
 
 std::string LoadTargetIP_Ansi() {
     char path[MAX_PATH];
@@ -75,33 +78,32 @@ int WSAAPI DetourSendTo(SOCKET s, const char* buf, int len, int flags, const str
 {
     if (to->sa_family == AF_INET) {
         struct sockaddr_in* dest = (struct sockaddr_in*)to;
+        struct sockaddr_in newDest = *dest; // Copy original destination
 
-        // 1. BROADCAST INTERCEPTION
-        // We MUST keep this, or the Client will never find the Host IP.
+        // 1. BROADCAST REDIRECT (Keep this!)
         if (dest->sin_addr.S_un.S_addr == INADDR_BROADCAST)
         {
-            struct sockaddr_in newDest;
-            newDest.sin_family = AF_INET;
-
-            // Passthrough Port
             newDest.sin_port = dest->sin_port;
-
             std::string ip = LoadTargetIP_Ansi();
             newDest.sin_addr.s_addr = inet_addr(ip.c_str());
-
-            static DWORD lastLog = 0;
-            if (GetTickCount() - lastLog > 500) {
-                std::cout << "[SEND] Broadcast Redirect -> " << ip << ":" << ntohs(newDest.sin_port) << std::endl;
-                lastLog = GetTickCount();
-            }
             return fpSendTo(s, buf, len, flags, (struct sockaddr*)&newDest, sizeof(newDest));
         }
 
-        // 2. NORMAL TRAFFIC LOGGING
-        char* destIP = inet_ntoa(dest->sin_addr);
-        if (strcmp(destIP, "127.0.0.1") != 0) {
-             std::cout << "[SEND] Direct -> " << destIP << ":" << ntohs(dest->sin_port) << " (Size: " << len << ")" << std::endl;
+        // 2. NAT TRAVERSAL (The "No Port Forwarding" Fix)
+        // Check if we have a "Real Port" saved for this destination IP
+        if (activeClients.count(dest->sin_addr.s_addr)) {
+            unsigned short realPort = activeClients[dest->sin_addr.s_addr];
+
+            // If the game is trying to send to the "Official" port (41010/42000),
+            // override it with the "Real" NAT port (e.g., 35084).
+            if (dest->sin_port != realPort) {
+                // Optional Log: Verify it works
+                // std::cout << "[NAT FIX] Redirecting " << ntohs(dest->sin_port) << " -> " << ntohs(realPort) << std::endl;
+                newDest.sin_port = realPort;
+            }
         }
+
+        return fpSendTo(s, buf, len, flags, (struct sockaddr*)&newDest, sizeof(newDest));
     }
     return fpSendTo(s, buf, len, flags, to, tolen);
 }
@@ -123,7 +125,20 @@ void LogIncoming(struct sockaddr* from, int bytes) {
 int WSAAPI DetourRecvFrom(SOCKET s, char* buf, int len, int flags, struct sockaddr* from, int* fromlen)
 {
     int ret = fpRecvFrom(s, buf, len, flags, from, fromlen);
-    if (ret > 0) LogIncoming(from, ret);
+
+    // If we successfully received data from a real Internet IP
+    if (ret > 0 && from && from->sa_family == AF_INET) {
+        struct sockaddr_in* sender = (struct sockaddr_in*)from;
+
+        // Ignore Loopback (127.0.0.1) and LAN (192.168...) to prevent confusion
+        // Adjust this check if your LAN IPs are different
+        if (sender->sin_addr.s_addr != inet_addr("127.0.0.1")) {
+
+            // SAVE THE PORT!
+            // "This IP is talking to me from Port X. I must reply to Port X."
+            activeClients[sender->sin_addr.s_addr] = sender->sin_port;
+        }
+    }
     return ret;
 }
 
