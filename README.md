@@ -4,4 +4,9 @@ Just a little thing I hacked up. This project setups up and compiles a version.d
 
 still in development at this point will update as im working on. 
 
-*.exe is the cracked client with the multiplayer tab enabled(i will be recompiling one myself but this isnt that)
+-*.exe is the cracked client with the multiplayer tab enabled(i will be recompiling one myself but this isnt that)
+-version.dll is the hacked dll that is hijacking the network fuctions in order to inject the provided -ip, 
+-ds2_ip.txt is the file it is looking for
+
+all three of these files are to be put into the main game folder where the current .exe is, id suggest creating an extra folder and moving the old *.exe into it before this so that you can revert to the orginal at anytime. 
+
